@@ -1,14 +1,20 @@
-from llama_cpp import Llama
-import re
+import json
 import os
+import re
 from pypdf import PdfReader
+from openai import OpenAI
 
-model_path = r"C:\Users\User\PyCharmMiscProject\model\T-lite-it-2.1-Q4_K_M.gguf"
+model = r"C:\Users\User\PyCharmMiscProject\model\T-lite-it-2.1-Q4_K_M.gguf"
+documents = r"C:\Users\User\PyCharmMiscProject\documents"
+OUTPUT_JSON_PATH = r"C:\Users\User\PyCharmMiscProject\results.json"
 
-neural_network = Llama(
-    model_path=model_path,
-    n_ctx=4096,
-    n_gpu_layers=-1,
+OPENAI_BASE_URL = "http://127.0.0.1:8080/v1"
+OPENAI_API_KEY = "ключ"
+MODEL_NAME = "local-model"
+
+client = OpenAI(
+    base_url=OPENAI_BASE_URL,
+    api_key=OPENAI_API_KEY
 )
 
 def read_pdf(file_path):
@@ -29,56 +35,121 @@ def find_all_inn(text):
             unique_inn.append(inn)
     return unique_inn
 
-def determine_role(inn, document_text):
+
+def determine_role_with_openai(inn, document_text, file_name):
     if len(document_text) > 3000:
         document_text = document_text[:3000] + "..."
+    prompt = f"""
+Ты - профессиональный юридический ассистент. Проанализируй текст судебного документа.
 
-    question = f"""
-Ты - юридический помощник. Найди в тексте человека или компанию с ИНН  {inn}.
-Определи, кто это: Истец, Ответчик или Третье лицо.
+Найди человека или компанию с ИНН {inn} и определи его/её роль в судебном процессе.
 
-Текст документа:
+В судебных документах роли обычно указаны явно:
+- "Истец: ООО "Ромашка", ИНН 1234567890" → это Истец
+- "Ответчик: Петров П.П., ИНН 0987654321" → это Ответчик
+- "Третье лицо: ООО "Василек", ИНН 1122334455" → это Третье лицо
+- "Взыскатель: ... ИНН ..." → это Истец
+- "Должник: ... ИНН ..." → это Ответчик
+- "Заявитель: ... ИНН ..." → это Истец или Заявитель
+
+Вот текст документа:
 {document_text}
 
+Найди ИНН {inn} в тексте и определи его роль.
 Ответь строго в формате:
-Роль: [Истец/Ответчик/Третье лицо/Не найден]
+Роль: [Истец/Ответчик/Третье лицо/Взыскатель/Должник/Заявитель/Не найден]
+Пояснение: [одно предложение, почему ты так решил]
 """
 
-    response = neural_network(
-        question,
-        max_tokens=100,
-        temperature=0.1,
-        echo=False
-    )
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system",
+                 "content": "Ты - полезный юридический ассистент, который строго следует инструкциям."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=150,
+            temperature=0.1
+        )
 
-    response_text = response['choices'][0]['text'].strip()
+        response_text = response.choices[0].message.content.strip()
+        print(f"    Ответ модели для ИНН {inn}: {response_text}")
 
-    match = re.search(r"Role:\s*(Истец|Ответчик|Третье лицо|Не найден)", response_text)
+        role_pattern = r"Роль:\s*([^\n]+)"
+        match = re.search(role_pattern, response_text)
 
-    if match:
-        role = match.group(1)
-    else:
-        role = "Not Determined"
+        if match:
+            role_text = match.group(1).strip()
+            known_roles = ["Истец", "Ответчик", "Третье лицо", "Взыскатель", "Должник", "Заявитель"]
+            for known_role in known_roles:
+                if known_role in role_text:
+                    role = known_role
+                    break
+            else:
+                role = "Не определена"
+        else:
+            role = "Не определена"
+        return {
+            'inn': inn,
+            'role': role,
+            'full_response': response_text
+        }
+
+    except Exception as e:
+        print(f"Ошибка при запросе к OpenAI API: {e}")
+        return {
+            'inn': inn,
+            'role': 'Ошибка API',
+            'full_response': str(e)
+        }
+
+def process_document(file_path, file_name):
+    text = read_pdf(file_path)
+    if not text or len(text) < 100:
+        print(f"{file_name}: Текст не извлечен")
+        return None
+    all_inn = find_all_inn(text)
+    if not all_inn:
+        print(f"{file_name}: ИНН не найдены")
+        return None
+    print(f"{file_name}: Найдены ИНН: {', '.join(all_inn)}")
+    participants = []
+    for inn in all_inn:
+        result = determine_role_with_openai(inn, text, file_name)
+        participants.append({
+            'inn': result['inn'],
+            'role': result['role']
+        })
+        print(f"ИНН: {result['inn']} -> Роль: {result['role']}")
 
     return {
-        'INN': inn,
-        'Role': role,
-        'Full_Response': response_text
+        'fileName': file_name,
+        'participants': participants
     }
 
+
+def save_results_to_json(results, output_path):
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"\nРезультаты сохранены в: {output_path}")
+
 def main():
-    documents_folder = r"C:\Users\User\PyCharmMiscProject\documents"
-    pdf_files = os.listdir(documents_folder)
+    print(f"API URL: {OPENAI_BASE_URL}")
+    print(f"Модель: {MODEL_NAME}")
+    all_files = os.listdir(documents)
+    pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
+    if not pdf_files:
+        print("PDF файлы не найдены в папке documents.")
+        return
+    print(f"\nНайдено {len(pdf_files)} PDF файлов для обработки.\n")
+    results = []
     for file_name in pdf_files:
-        print(f"\n {file_name}")
-        full_path = os.path.join(documents_folder, file_name)
-        text = read_pdf(full_path)
-        all_inn = find_all_inn(text)
-        if not all_inn:
-            print(" Не найдены ИНН")
-            continue
-        print(f"Найденные ИНН: {', '.join(all_inn)}")
-        for inn in all_inn:
-            result = determine_role(inn, text)
-            print(f"  INN: {inn} -> Role: {result['Role']}")
-main()
+        print(f"Обработка: {file_name}")
+        full_path = os.path.join(documents, file_name)
+        result = process_document(full_path, file_name)
+        if result:
+            results.append(result)
+    save_results_to_json(results, OUTPUT_JSON_PATH)
+if __name__ == "__main__":
+    main()
