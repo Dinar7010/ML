@@ -129,10 +129,11 @@ def process_document(file_path, file_name):
     }
 
 
-def save_results_to_json(results, output_path):
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"\nРезультаты сохранены в: {output_path}")
+def save_results_to_json(results):
+    json_output = json.dumps(results, ensure_ascii=False, indent=2)
+    print("РЕЗУЛЬТАТЫ В ФОРМАТЕ JSON:")
+    print(json_output)
+    print("=" * 60)
 
 def main():
     print(f"API URL: {OPENAI_BASE_URL}")
