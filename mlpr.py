@@ -33,37 +33,29 @@ def load_annotations(annotations_path):
     return annotations
 
 
-def determine_role_with_openai(inn, document_text, document_index):
-    if len(document_text) > 3000:
-        document_text = document_text[:3000] + "..."
+def determine_role_with_openai(inn, doc_data):
+    resolution_text = doc_data.get('resolution', '')
+    if len(resolution_text) > 2000:
+        resolution_text = resolution_text[:2000] + "..."
+
+    json_context = {
+        "participants": doc_data.get('participants', []),
+        "resolution": resolution_text
+    }
+    json_string = json.dumps(json_context, ensure_ascii=False, indent=2)
 
     prompt = f"""
-Ты - профессиональный юридический ассистент. Твоя задача - найти в тексте судебного документа конкретный ИНН и точно определить роль этого лица в судебном процессе.
+Ты — системный ассистент по анализу данных. Перед тобой документ в формате JSON.
+В массиве "participants" содержатся объекты с ИНН ("inn") и соответствующими ролями ("role").
 
-ИНН, который нужно найти: {inn}
+Твоя задача: найди в предоставленном JSON объект, у которого "inn" равен "{inn}", и извлеки из него значение "role".
 
-Правила определения ролей:
-1. В судебных документах роли указываются явно в начале документа или в описании участников процесса
-2. Форматы указания ролей:
-   - "Истец: ООО "Название", ИНН XXXXX" → это Истец
-   - "Ответчик: ООО "Название", ИНН XXXXX" → это Ответчик  
-   - "Третье лицо: ООО "Название", ИНН XXXXX" → это Третье лицо
-   - "по иску [кого-то]" → тот, кто подает иск - Истец
-   - "к [кому-то]" → тот, к кому предъявлен иск - Ответчик
+JSON документ:
+{json_string}
 
-3. ВАЖНО: Ищи именно ИНН {inn} в тексте. Не путай с другими ИНН!
-
-Текст документа:
-{document_text}
-
-Найди в тексте ИНН {inn} и определи его роль.
 Ответь строго в формате:
-Роль: [Истец/Ответчик/Третье лицо]
-Пояснение: [одно предложение, почему ты так решил, с указанием места в тексте, где найдена эта информация]
-ВНИМАНИЕ: В тексте могут быть упоминания нескольких организаций с разными ИНН.
-Тебя интересует ТОЛЬКО организация с ИНН {inn}.
-Найди в тексте именно этот ИНН и определи роль ТОЛЬКО для него.
-Не путай с другими ИНН, даже если они упоминаются рядом!
+Роль: [истец / ответчик / третье лицо]
+Пояснение: [одно предложение, подтверждающее извлечение из JSON]
 """
 
     try:
@@ -71,10 +63,10 @@ def determine_role_with_openai(inn, document_text, document_index):
             model=MODEL_NAME,
             messages=[
                 {"role": "system",
-                 "content": "Ты - полезный юридический ассистент, который строго следует инструкциям."},
+                 "content": "Ты - точный робот-парсер JSON, который извлекает данные строго по инструкции."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=150,
+            max_tokens=100,
             temperature=0.0
         )
 
@@ -85,22 +77,21 @@ def determine_role_with_openai(inn, document_text, document_index):
         match = re.search(role_pattern, response_text)
 
         if match:
-            role_text = match.group(1).strip()
-            known_roles = ["Истец", "Ответчик", "Третье лицо", "Взыскатель", "Должник", "Заявитель"]
-            for known_role in known_roles:
-                if known_role in role_text:
-                    predicted_role = known_role
-                    break
+            role_text = match.group(1).strip().lower()
+            if "истец" in role_text:
+                return "истец"
+            elif "ответчик" in role_text:
+                return "ответчик"
+            elif "третье" in role_text or "3-е" in role_text:
+                return "третье лицо"
             else:
-                predicted_role = "Не определена"
+                return "не определена"
         else:
-            predicted_role = "Не определена"
-
-        return predicted_role
+            return "не определена"
 
     except Exception as e:
         print(f"Ошибка при запросе к OpenAI API: {e}")
-        return "Ошибка API"
+        return "ошибка api"
 
 def build_confusion_matrix(annotations):
     y_true = []
@@ -120,7 +111,7 @@ def build_confusion_matrix(annotations):
 
             if not inn or not true_role:
                 continue
-            predicted_role = determine_role_with_openai(inn, document_text, doc_index)
+            predicted_role = determine_role_with_openai(inn, doc_data)
             y_true.append(true_role)
             y_pred.append(predicted_role)
             print(f" ИНН: {inn} -> Истина: {true_role}, Предсказано: {predicted_role}")
@@ -128,12 +119,14 @@ def build_confusion_matrix(annotations):
     if not y_true:
         print("Нет данных для оценки!")
         return [], [], None, None
-    labels = sorted(set(y_true + y_pred))
+    y_true = [str(i).strip().lower() for i in y_true]
+    y_pred = [str(i).strip().lower() for i in y_pred]
+    labels = ["истец", "ответчик", "третье лицо", "не определена"]
     print("\nCONFUSION MATRIX:")
     cm = confusion_matrix(y_true, y_pred, labels=labels)
-    print("   " + " ".join(f"{label:>12}" for label in labels))
+    print(f"{'':>15} " + " ".join(f"{label:>15}" for label in labels))
     for i, label in enumerate(labels):
-        print(f"{label:>12} " + " ".join(f"{cm[i][j]:>12}" for j in range(len(labels))))
+        print(f"{label:>15} " + " ".join(f"{cm[i][j]:>15}" for j in range(len(labels))))
     print("\nОТЧЕТ О КЛАССИФИКАЦИИ:")
     report = classification_report(y_true, y_pred, labels=labels, zero_division=0)
     print(report)
