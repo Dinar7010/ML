@@ -1,8 +1,10 @@
 import json
-import re
 from openai import OpenAI
-from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
-
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    accuracy_score,
+)
 RIGHT_ANSWERS = r"C:\Users\User\PyCharmMiscProject\annotations.json"
 OPENAI_BASE_URL = "http://127.0.0.1:8080/v1"
 OPENAI_API_KEY = "key"
@@ -13,141 +15,219 @@ client = OpenAI(
     api_key=OPENAI_API_KEY
 )
 
+ROLES = [
+    "истец",
+    "ответчик",
+    "третье лицо",
+    "иное"
+]
 
 def load_annotations(annotations_path):
-    with open(annotations_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    pattern = r'(\{"participants":\s*\[.*?\],\s*"resolution":\s*".*?"\})'
-    matches = re.findall(pattern, content, re.DOTALL)
-
     annotations = []
-    for match in matches:
-        try:
-            data = json.loads(match)
-            annotations.append(data)
-        except json.JSONDecodeError as e:
-            print(f"Ошибка парсинга: {e}")
-            continue
-
-    print(f"Загружено {len(annotations)} документов из annotations.json")
+    with open(annotations_path, "r", encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                annotations.append(data)
+            except json.JSONDecodeError as e:
+                print(
+                    f"Ошибка JSON в строке {line_number}: {e}"
+                )
+    print(
+        f"Загружено {len(annotations)} документов из annotations.json"
+    )
     return annotations
 
-
-def determine_role_with_openai(inn, doc_data):
-    resolution_text = doc_data.get('resolution', '')
-    if len(resolution_text) > 2000:
-        resolution_text = resolution_text[:2000] + "..."
-
-    json_context = {
-        "participants": doc_data.get('participants', []),
-        "resolution": resolution_text
-    }
-    json_string = json.dumps(json_context, ensure_ascii=False, indent=2)
-
+def determine_roles_with_openai(doc_data):
+    resolution = doc_data.get("resolution", "")
+    if len(resolution) > 8000:
+        resolution = resolution[:8000]
+    participants = []
+    for p in doc_data.get("participants", []):
+        participants.append({
+            "inn": p.get("inn")
+        })
     prompt = f"""
-Ты — системный ассистент по анализу данных. Перед тобой документ в формате JSON.
-В массиве "participants" содержатся объекты с ИНН ("inn") и соответствующими ролями ("role").
+Ты эксперт по анализу арбитражных судебных решений.
 
-Твоя задача: найди в предоставленном JSON объект, у которого "inn" равен "{inn}", и извлеки из него значение "role".
+Твоя задача определить процессуальную роль каждого участника дела.
 
-JSON документ:
-{json_string}
+Возможные роли:
 
-Ответь строго в формате:
-Роль: [истец / ответчик / третье лицо]
-Пояснение: [одно предложение, подтверждающее извлечение из JSON]
+- истец
+- ответчик
+- третье лицо
+- иное
+
+
+Участники:
+
+{json.dumps(
+    participants,
+    ensure_ascii=False,
+    indent=2
+)}
+Текст решения:
+
+{resolution}
+Правила анализа:
+1. Определи истца по конструкции:
+   "по иску X к Y"
+2. Определи ответчика:
+   лицо после "к"
+3. Определи третьих лиц:
+   конструкции:
+   "при участии третьих лиц"
+   "к участию привлечены"
+4. Не выбирай роль по частоте слов.
+5. Верни роль для каждого ИНН.
+Ответ строго JSON:
+{{
+ "roles":[
+    {{
+      "inn":"123",
+      "role":"истец"
+    }}
+ ]
+}}
 """
-
-    try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system",
-                 "content": "Ты - точный робот-парсер JSON, который извлекает данные строго по инструкции."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=100,
-            temperature=0.0
-        )
-
-        response_text = response.choices[0].message.content.strip()
-        print(f"    Ответ модели для ИНН {inn}: {response_text}")
-
-        role_pattern = r"Роль:\s*([^\n]+)"
-        match = re.search(role_pattern, response_text)
-
-        if match:
-            role_text = match.group(1).strip().lower()
-            if "истец" in role_text:
-                return "истец"
-            elif "ответчик" in role_text:
-                return "ответчик"
-            elif "третье" in role_text or "3-е" in role_text:
-                return "третье лицо"
-            else:
-                return "не определена"
-        else:
-            return "не определена"
-
-    except Exception as e:
-        print(f"Ошибка при запросе к OpenAI API: {e}")
-        return "ошибка api"
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {
+                "role":"system",
+                "content":
+                "Ты классификатор судебных участников. Отвечай только JSON."
+            },
+            {
+                "role":"user",
+                "content":prompt
+            }
+        ],
+        temperature=0,
+        max_tokens=300,
+        response_format={
+            "type":"json_object"
+        }
+    )
+    answer = response.choices[0].message.content
+    print("\nОтвет модели:")
+    print(answer)
+    result = json.loads(answer)
+    roles = {}
+    for item in result.get("roles", []):
+        inn = item.get("inn")
+        role = item.get("role", "иное")
+        if role not in ROLES:
+            role = "иное"
+        roles[inn] = role
+    return roles
 
 def build_confusion_matrix(annotations):
     y_true = []
     y_pred = []
-
     print("НАЧАЛО ОЦЕНКИ МОДЕЛИ")
-
     for doc_index, doc_data in enumerate(annotations):
-        document_text = doc_data.get('resolution', '')
-        participants = doc_data.get('participants', [])
-        print(f"\nДокумент {doc_index + 1}/{len(annotations)}")
-        print(f"Участников в документе: {len(participants)}")
-
+        participants = doc_data.get("participants", [])
+        print(
+            f"\nДокумент {doc_index + 1}/{len(annotations)}"
+        )
+        print(
+            f"Участников: {len(participants)}"
+        )
+        predicted_roles = determine_roles_with_openai(
+            doc_data
+        )
         for participant in participants:
-            inn = participant.get('inn')
-            true_role = participant.get('role')
-
+            inn = participant.get("inn")
+            true_role = participant.get("role")
             if not inn or not true_role:
                 continue
-            predicted_role = determine_role_with_openai(inn, doc_data)
-            y_true.append(true_role)
-            y_pred.append(predicted_role)
-            print(f" ИНН: {inn} -> Истина: {true_role}, Предсказано: {predicted_role}")
-    print("РЕЗУЛЬТАТЫ ОЦЕНКИ")
+            predicted_role = predicted_roles.get(
+                inn,
+                "иное"
+            )
+            print(
+                f"ИНН: {inn}\n"
+                f"Истина: {true_role}\n"
+                f"Предсказание: {predicted_role}\n"
+            )
+            y_true.append(
+                true_role.strip().lower()
+            )
+            y_pred.append(
+                predicted_role.strip().lower()
+            )
     if not y_true:
-        print("Нет данных для оценки!")
-        return [], [], None, None
-    y_true = [str(i).strip().lower() for i in y_true]
-    y_pred = [str(i).strip().lower() for i in y_pred]
-    labels = ["истец", "ответчик", "третье лицо", "не определена"]
-    print("\nCONFUSION MATRIX:")
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
-    print(f"{'':>15} " + " ".join(f"{label:>15}" for label in labels))
+        print("Нет данных для оценки.")
+        return None
+    labels = ROLES
+    cm = confusion_matrix(
+        y_true,
+        y_pred,
+        labels=labels
+    )
+    print(
+        f"{'':15}",
+        end=""
+    )
+    for label in labels:
+        print(
+            f"{label:15}",
+            end=""
+        )
+    print()
+
     for i, label in enumerate(labels):
-        print(f"{label:>15} " + " ".join(f"{cm[i][j]:>15}" for j in range(len(labels))))
-    print("\nОТЧЕТ О КЛАССИФИКАЦИИ:")
-    report = classification_report(y_true, y_pred, labels=labels, zero_division=0)
-    print(report)
-    accuracy = accuracy_score(y_true, y_pred)
-    correct = sum(1 for t, p in zip(y_true, y_pred) if t == p)
+
+        print(
+            f"{label:15}",
+            end=""
+        )
+        for j in range(len(labels)):
+
+            print(
+                f"{cm[i][j]:15}",
+                end=""
+            )
+        print()
+    print(
+        classification_report(
+            y_true,
+            y_pred,
+            labels=labels,
+            zero_division=0
+        )
+    )
+    accuracy = accuracy_score(
+        y_true,
+        y_pred
+    )
+    correct = sum(
+        1
+        for t, p in zip(y_true, y_pred)
+        if t == p
+    )
     total = len(y_true)
-    print(f"\nОБЩАЯ ТОЧНОСТЬ МОДЕЛИ: {accuracy:.4f} ({correct}/{total} правильных)")
-    return y_true, y_pred, cm, report
+    print(
+        f"Accuracy = {accuracy:.4f}"
+    )
+    print(
+        f"Правильно: {correct}/{total}"
+    )
+    return cm
 
 def main():
-    print(f"API URL: {OPENAI_BASE_URL}")
-    print(f"Модель: {MODEL_NAME}")
-    print("=" * 80)
+    print("Модель:", MODEL_NAME)
+    print("API:", OPENAI_BASE_URL)
     annotations = load_annotations(RIGHT_ANSWERS)
     if not annotations:
-        print("Не удалось загрузить аннотации")
+        print("Аннотации не найдены.")
         return
-
-    print(f"\nВсего документов для обработки: {len(annotations)}")
-    print("=" * 80)
-    y_true, y_pred, cm, report = build_confusion_matrix(annotations)
+    build_confusion_matrix(annotations)
 
 if __name__ == "__main__":
     main()
