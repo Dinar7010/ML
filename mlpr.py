@@ -1,6 +1,10 @@
 import json
 from openai import OpenAI
-from sklearn.metrics import (confusion_matrix,classification_report,accuracy_score,)
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    accuracy_score,
+)
 RIGHT_ANSWERS = r"C:\Users\User\PyCharmMiscProject\annotations.json"
 OPENAI_BASE_URL = "http://127.0.0.1:8080/v1"
 OPENAI_API_KEY = "key"
@@ -24,17 +28,23 @@ def load_annotations(annotations_path):
                 data = json.loads(line)
                 annotations.append(data)
             except json.JSONDecodeError as e:
-                print(f"Ошибка JSON в строке {line_number}: {e}")
-    print( f"Загружено {len(annotations)} документов из annotations.json")
+                print(
+                    f"Ошибка JSON в строке {line_number}: {e}"
+                )
+    print(
+        f"Загружено {len(annotations)} документов из annotations.json"
+    )
     return annotations
 
 def determine_roles_with_openai(doc_data):
     resolution = doc_data.get("resolution", "")
-    if len(resolution) > 8000:
-        resolution = resolution[:8000]
+    if len(resolution) > 4000:
+        resolution = resolution[:4000]
     participants = []
     for p in doc_data.get("participants", []):
-        participants.append({"inn": p.get("inn")})
+        participants.append({
+            "inn": p.get("inn")
+        })
     prompt = f"""
 Ты эксперт по анализу арбитражных судебных решений.
 
@@ -50,9 +60,9 @@ def determine_roles_with_openai(doc_data):
 
 Участники:
 
-{json.dumps(participants,ensure_ascii=False,indent=2
-)}
+{json.dumps(participants,ensure_ascii=False,indent=2)}
 Текст решения:
+
 {resolution}
 Правила анализа:
 1. Определи истца по конструкции:
@@ -65,14 +75,24 @@ def determine_roles_with_openai(doc_data):
    "к участию привлечены"
 4. Не выбирай роль по частоте слов.
 5. Верни роль для каждого ИНН.
-Ответ строго JSON:
+Верни ТОЛЬКО JSON.
+
+Запрещено:
+- писать объяснения;
+- писать комментарии;
+- использовать Markdown;
+- использовать ```json;
+- писать любой текст после закрывающей фигурной скобки.
+
+Допустимый формат ответа:
+
 {{
- "roles":[
+  "roles": [
     {{
-      "inn":"123",
-      "role":"истец"
+      "inn": "...",
+      "role": "истец"
     }}
- ]
+  ]
 }}
 """
     response = client.chat.completions.create(
@@ -89,7 +109,7 @@ def determine_roles_with_openai(doc_data):
             }
         ],
         temperature=0,
-        max_tokens=300,
+        max_tokens=1000,
         response_format={
             "type":"json_object"
         }
@@ -97,7 +117,12 @@ def determine_roles_with_openai(doc_data):
     answer = response.choices[0].message.content
     print("\nОтвет модели:")
     print(answer)
-    result = json.loads(answer)
+    decoder = json.JSONDecoder()
+    try:
+        result, end = decoder.raw_decode(answer)
+    except json.JSONDecodeError:
+        print(answer)
+        return {}
     roles = {}
     for item in result.get("roles", []):
         inn = item.get("inn")
@@ -140,7 +165,7 @@ def build_confusion_matrix(annotations):
         print()
     print(classification_report(y_true,y_pred,labels=labels,zero_division=0))
     accuracy = accuracy_score(y_true,y_pred)
-    correct = sum(1for t, p in zip(y_true, y_pred)if t == p)
+    correct = sum(1 for t, p in zip(y_true, y_pred)if t == p)
     total = len(y_true)
     print(f"Accuracy = {accuracy:.4f}")
     print(f"Правильно: {correct}/{total}")
