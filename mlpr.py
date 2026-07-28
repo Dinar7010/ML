@@ -2,7 +2,7 @@ import json
 from openai import OpenAI
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 
-RIGHT_ANSWERS = r"C:\Users\User\PyCharmMiscProject\annotations.json"
+RIGHT_ANSWERS = r"C:\Users\User\PyCharmMiscProject\mlpr-project\annotations.json"
 OPENAI_BASE_URL = "http://127.0.0.1:8080/v1"
 OPENAI_API_KEY = "key"
 MODEL_NAME = "local-model"
