@@ -45,7 +45,7 @@ def exec_predict_role(resolution, participants):
     participants_payload = [{"inn": p.get("inn")} for p in participants]
     prompt = f"""
 Ты эксперт по анализу арбитражных судебных решений.
-
+На вход подаются начало и конец судебного документа.
 Твоя задача определить процессуальную роль каждого участника дела.
 
 Возможные роли:
