@@ -17,6 +17,13 @@ ROLES = ["истец", "ответчик", "третье лицо", "иное"]
 Y_TRUE = []
 Y_PRED = []
 
+def build_excerpt(text,HEAD_CHARS,TAIL_CHARS):
+    if len(text)<=HEAD_CHARS+TAIL_CHARS:
+        return text
+    head = text[:HEAD_CHARS]
+    tail = text[-TAIL_CHARS:]
+    return f"{head}\n\n...\n\n{tail}"
+
 def _extract_json(raw_text):
     start = raw_text.find("{")
     if start == -1:
