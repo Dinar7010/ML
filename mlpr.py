@@ -38,8 +38,7 @@ def _extract_json(raw_text):
         return {}
 
 def exec_predict_role(resolution, participants):
-    if len(resolution) > 4000:
-        resolution = resolution[:4000]
+    resolution=build_excerpt(resolution)
     participants_payload = [{"inn": p.get("inn")} for p in participants]
     prompt = f"""
 Ты эксперт по анализу арбитражных судебных решений.
