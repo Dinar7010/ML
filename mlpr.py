@@ -23,8 +23,8 @@ Y_PRED = []
 def build_excerpt(text,head_chars=HEAD_CHARS,tail_chars=TAIL_CHARS):
     if len(text)<=head_chars+tail_chars:
         return text
-    head = text[:HEAD_CHARS]
-    tail = text[-TAIL_CHARS:]
+    head = text[:head_chars]
+    tail = text[-tail_chars:]
     return f"{head}\n\n...\n\n{tail}"
 
 def _extract_json(raw_text):
