@@ -14,6 +14,9 @@ client = OpenAI(
 
 ROLES = ["истец", "ответчик", "третье лицо", "иное"]
 
+HEAD_CHARS=4000
+TAIL_CHARS=4000
+
 Y_TRUE = []
 Y_PRED = []
 
