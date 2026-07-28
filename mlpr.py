@@ -20,8 +20,8 @@ TAIL_CHARS=4000
 Y_TRUE = []
 Y_PRED = []
 
-def build_excerpt(text,HEAD_CHARS,TAIL_CHARS):
-    if len(text)<=HEAD_CHARS+TAIL_CHARS:
+def build_excerpt(text,head_chars=HEAD_CHARS,tail_chars=TAIL_CHARS):
+    if len(text)<=head_chars+tail_chars:
         return text
     head = text[:HEAD_CHARS]
     tail = text[-TAIL_CHARS:]
