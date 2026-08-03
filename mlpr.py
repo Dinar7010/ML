@@ -14,14 +14,14 @@ client = OpenAI(
 
 ROLES = ["истец", "ответчик", "третье лицо", "иное"]
 
-HEAD_CHARS=4000
-TAIL_CHARS=4000
+HEAD_CHARS = 4000
+TAIL_CHARS = 4000
 
 Y_TRUE = []
 Y_PRED = []
 
-def build_excerpt(text,head_chars=HEAD_CHARS,tail_chars=TAIL_CHARS):
-    if len(text)<=head_chars+tail_chars:
+def build_excerpt(text, head_chars=HEAD_CHARS, tail_chars=TAIL_CHARS):
+    if len(text) <= head_chars + tail_chars:
         return text
     head = text[:head_chars]
     tail = text[-tail_chars:]
@@ -40,21 +40,23 @@ def _extract_json(raw_text):
         print(raw_text)
         return {}
 
-def exec_predict_role(resolution, participants):
-    resolution=build_excerpt(resolution)
+def exec_predict_role(resolution, participants, _retries_left=1):
+    resolution = build_excerpt(resolution)
+
     participants_payload = [{"inn": p.get("inn")} for p in participants]
+
     prompt = f"""
 Ты эксперт по анализу арбитражных судебных решений.
- 
+
 Твоя задача определить процессуальную роль каждого участника дела.
- 
+
 Возможные роли:
- 
+
 - истец
 - ответчик
 - третье лицо
 - иное
- 
+
 ВАЖНО про роль "иное":
 Роль "иное" — редкое исключение, а не запасной вариант на случай сомнений.
 Используй "иное" ТОЛЬКО если участник явно не истец, не ответчик и не третье
@@ -63,7 +65,7 @@ def exec_predict_role(resolution, participants):
 выбирай наиболее вероятную из трёх основных ролей (истец / ответчик / третье
 лицо), а не "иное". Почти все участники судебного дела относятся к одной из
 этих трёх ролей.
- 
+
 Правила анализа:
 1. Определи истца по конструкции:
    "по иску X к Y"
@@ -79,50 +81,42 @@ def exec_predict_role(resolution, participants):
    и ответчика и не являются стороной иска напрямую.
 4. Не выбирай роль по частоте слов или по положению в тексте — только по
    явной формулировке роли участника.
-5. Верни роль для каждого ИНН из списка участников.
- 
-Пример (для понимания формата, ИНН и текст условные):
- 
-Участники:
-[
-  {{"inn": "1111111111"}},
-  {{"inn": "2222222222"}},
-  {{"inn": "3333333333"}}
-]
-Текст решения:
-"...рассмотрев дело по иску ООО «Альфа» (ИНН 1111111111) к ООО «Бета»
-(ИНН 2222222222), при участии третьего лица ИП Иванова И.И.
-(ИНН 3333333333)..."
- 
-Правильный ответ:
-{{
-  "roles": [
-    {{"inn": "1111111111", "role": "истец"}},
-    {{"inn": "2222222222", "role": "ответчик"}},
-    {{"inn": "3333333333", "role": "третье лицо"}}
-  ]
-}}
- 
-Теперь реальная задача.
- 
-Участники:
- 
+5. В тексте рядом с ИНН часто встречаются ДРУГИЕ похожие по виду номера —
+   ОГРН, ОГРНИП, КПП. Это НЕ ИНН, не путай их между собой:
+   - ИНН организации — 10 цифр, ИНН ИП — 12 цифр.
+   - ОГРН — 13 цифр, ОГРНИП — 15 цифр, КПП — 9 цифр.
+   В поле "inn" итогового ответа ты ОБЯЗАН вернуть ТОЧНО ТО ЖЕ значение,
+   которое было передано тебе в поле "inn" входного списка участников —
+   скопируй его без изменений.
+
+КРИТИЧЕСКИ ВАЖНО:
+В списке участников ниже ровно {len(participants_payload)} человек/организаций
+(по числу ИНН). Ты ОБЯЗАН вернуть в массиве "roles" РОВНО {len(participants_payload)}
+объектов — по одному для КАЖДОГО ИНН из списка, без единого пропуска, даже если
+ты не до конца уверен в роли — в этом случае выбери наиболее вероятную роль.
+Не останавливайся после первого участника. Пройди по списку до конца.
+Значения "inn" в твоём ответе должны СОВПАДАТЬ СИМВОЛ В СИМВОЛ со значениями
+"inn" из списка участников ниже.
+
+Участники ({len(participants_payload)} шт.):
+
 {json.dumps(participants_payload, ensure_ascii=False, indent=2)}
 Текст решения:
- 
+
 {resolution}
- 
+
 Верни ТОЛЬКО JSON.
- 
+
 Запрещено:
 - писать объяснения;
 - писать комментарии;
 - использовать Markdown;
 - использовать ```json;
-- писать любой текст после закрывающей фигурной скобки.
- 
+- писать любой текст после закрывающей фигурной скобки;
+- пропускать участников — каждый ИНН из списка выше должен получить роль.
+
 Допустимый формат ответа:
- 
+
 {{
   "roles": [
     {{
@@ -161,6 +155,15 @@ def exec_predict_role(resolution, participants):
         if role not in ROLES:
             role = "иное"
         roles_by_inn[inn] = role
+    missing = [p for p in participants if p.get("inn") not in roles_by_inn]
+    if missing and _retries_left > 0:
+        print(f"Модель пропустила {len(missing)} участников, повторный запрос")
+        retry_roles = exec_predict_role(
+            resolution, missing, _retries_left=_retries_left - 1
+        )
+        roles_by_inn.update(retry_roles)
+    elif missing:
+        print(f"Не удалось получить роль для {len(missing)} участников даже после повтора")
     return roles_by_inn
 
 def exec_predict_roles(resolution, participants):
